@@ -1,4 +1,5 @@
 import praw
+import time
 
 CLIENT_ID = ''
 CLIENT_SECRET = ''
@@ -6,7 +7,9 @@ USER_AGENT = ''
 USERNAME = ''
 PASSWORD = ''
 
-SUBREDDIT = 'tobortobor'
+SUBREDDIT
+
+MAX_TIME = 1
 
 class Response:
 
@@ -25,11 +28,21 @@ class Response:
 
 
 
-RESPONSES = [Response('Have you attempted', 'a', redirect_codes={'yes': 'b', 'no': 'c'}),
-             Response('b node', 'b', end=True),
-             Response('c node', 'c', end=True)]
+RESPONSES = [Response('Did you solve the problem?', '1', redirect_codes={'yes': '2', 'no': '3'}),
+             Response('Good job!', '2', end=True),
+             Response('Ok, describe what you have done to try and solve the problem', '3', redirect_codes={'':'4'}, sticky=True),
+             Response('Will post as a comment so everybody can see', '4', end=True)]
 
-FIRST_RESPONSE_CODE = 'a'
+FIRST_RESPONSE_CODE = '1'
+
+# Keeps track of the current posts
+post_watchlist = set()
+
+
+def hour_difference(x, y):
+    diff = abs(x - y)
+    diff /= (360)
+    return int(diff)
 
 def get_response(code):
     for resp in RESPONSES:
@@ -37,18 +50,21 @@ def get_response(code):
             return resp
     return None
 
-def process(comment):
+def process_comment(comment):
     parent = comment.parent()
+    submission = comment.submission
     cur_response = None
     for resp in RESPONSES:
         if resp.code in parent.body:
             cur_response = resp
+
     if cur_response == None:
         print('Error while processing comment: Parent comment did not contain code')
         return
 
     if cur_response.end:
-        print('Processed comment successfully: End of process')
+        print('Processed comment successfully: Process finished')
+        submission.mod.approve()
         return
 
     next_code = None
@@ -57,12 +73,46 @@ def process(comment):
             next_code = cur_response.redirect_codes[redirect]
     if next_code == None:
         print('Processed comment successfully: User provided invalid response')
-        comment.reply('Invalid response, please try responding with the valid responses.\n\n' + cur_response.comment + '\n\n' + 'Code: ' + cur_response.code)
+        comment.reply('Invalid response, please try responding with the valid responses.\n\n' + cur_response.comment + '\n\n' + 'Code: ' + cur_response.code).mod.distinguish('yes')
     else:
         print('Processed comment successfully: User provided valid response')
-        next_response = None
         next_response = get_response(next_code)
-        comment.reply(next_response.comment + '\n\n' + 'Code: ' + next_response.code)
+
+        if next_response.end:
+            print('Processed comment successfully: End of process, posting submission to community')
+            comment.submission.mod.approve()
+
+        if cur_response.sticky:
+            c = submission.reply('OP provided the following information:\n\n' + comment.body)
+            if c != None:
+                c.mod.distinguish('yes', sticky=True)
+
+        comment.reply(next_response.comment + '\n\n' + 'Code: ' + next_response.code).mod.distinguish('yes')
+
+def process_submission(submission):
+    print('Processing new submission: ' + submission.title)
+    already_commented = False
+    
+    if hour_difference(submission.created_utc, time.time()) >= MAX_TIME:
+        print('Old post, ignoring')
+        return
+    
+    if submission.removed:
+        print('Violates rules, ignoring')
+        return
+
+    for comment in submission.comments:
+        if USERNAME == comment.author and FIRST_RESPONSE_CODE in comment.body:
+            already_commented = True
+
+    if not already_commented:
+        first_response = get_response(FIRST_RESPONSE_CODE)
+        submission.reply(first_response.comment + '\n\n' + 'Code: ' + first_response.code).mod.distinguish('yes', sticky=True)
+        print('Added new top-level comment')
+        submission.mod.remove()
+
+    print('Processed Successfully')
+
 
 
 def main():
@@ -77,28 +127,60 @@ def main():
 
     subreddit = reddit.subreddit(SUBREDDIT)
     stream = subreddit.stream.submissions(pause_after=0)
+
+    early_posts = set()
+
     while True:
+
+        ignored_posts = set()
+
+        for submission in early_posts:
+            if submission == None:
+                break
+            updated_submission = reddit.submission(submission)
+            # Check if automoderator has commented
+            automoderator = False
+            for comment in updated_submission.comments:
+                if comment.author.name == 'txnelite':
+                    automoderator = True
+            if not automoderator:
+                if hour_difference(updated_submission.created_utc, time.time()) >= MAX_TIME:
+                    ignored_posts.add(submission)
+                continue
+
+            process_submission(updated_submission)
+            ignored_posts.add(submission)
+        
+        for submission in ignored_posts:
+            early_posts.remove(submission)
+
+        # Check new submissions
         for submission in stream:
             if submission == None:
                 break
-            print('Processing new submission: ' + submission.title)
-            already_commented = False
+            # Check if automoderator has commented
+            automoderator = False
             for comment in submission.comments:
-                if reddit.user.me() == comment.author and FIRST_RESPONSE_CODE in comment.body:
-                    already_commented = True
-            if not already_commented:
-                first_response = get_response(FIRST_RESPONSE_CODE)
-                submission.reply(first_response.comment + '\n\n' + 'Code: ' + first_response.code)
-                print('Added new top-level comment')
-            print('Processed Successfully')
+                print('Checking ' + comment.author.name)
+                if comment.author.name == 'txnelite':
+                    automoderator = True
+            if not automoderator:
+                early_posts.add(submission.id)
+                break
+
+            process_submission(submission)
+        
         # Check inbox
         for comment in reddit.inbox.unread(limit=None):
             if isinstance(comment, praw.models.Comment):
-                print('Processing new comment:')
+                print('Processing new comment: ')
                 if comment.subreddit.display_name.lower() != SUBREDDIT.lower():
                     print('Skipped comment: Incorrect subreddit')
-                # Process comment
-                process(comment)
+                elif comment.submission.author != comment.author:
+                    print('Skipped comment: author is not OP')
+                else:
+                    # Process comment
+                    process_comment(comment)
                 # Mark as read so it won't do it again later
                 comment.mark_read()
 
