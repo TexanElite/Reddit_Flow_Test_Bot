@@ -1,4 +1,5 @@
 import praw
+import json
 import time
 
 CLIENT_ID = ''
@@ -7,7 +8,13 @@ USER_AGENT = ''
 USERNAME = ''
 PASSWORD = ''
 
-SUBREDDIT
+CLIENT_ID = '2K9u0FXO0gss5g'
+CLIENT_SECRET = 'd5huwFvXOwxDNlwCtole3CSOakg'
+USER_AGENT = 'flow_test_bot (u/txnelite)'
+USERNAME = 'Flow_Test_txnelite'
+PASSWORD = 'ECTURaGeNteWomPOSTaTeRlo'
+SUBREDDIT = 'tobortobor'
+MODERATOR = 'txnelite'
 
 MAX_TIME = 1
 
@@ -28,11 +35,36 @@ class Response:
 
 
 
-RESPONSES = [Response('Did you solve the problem?', '1', redirect_codes={'yes': '2', 'no': '3'}),
-             Response('Good job!', '2', end=True),
-             Response('Ok, describe what you have done to try and solve the problem', '3', redirect_codes={'':'4'}, sticky=True),
-             Response('Will post as a comment so everybody can see', '4', end=True)]
+#RESPONSES = [Response('Did you solve the problem?', '1', redirect_codes={'yes': '2', 'no': '3'}),
+#             Response('Good job!', '2', end=True),
+#             Response('Ok, describe what you have done to try and solve the problem', '3', redirect_codes={'':'4'}, sticky=True),
+#             Response('Will post as a comment so everybody can see', '4', end=True)]
 
+RESPONSE_FILENAME = 'responses.json'
+
+RESPONSE_FILE = open(RESPONSE_FILENAME, 'r')
+RESPONSE_JSON = json.loads(RESPONSE_FILE.read())
+RESPONSES = []
+for key in RESPONSE_JSON:
+    response = RESPONSE_JSON[key]
+    comment = response['comment']
+    code = response['code']
+    redirect_codes = None
+    end = False
+    sticky = False
+
+    if 'redirect_codes' in response:
+        redirect_codes = dict()
+        for key in response['redirect_codes']:
+            redirect_codes[key] = response['redirect_codes'][key]
+    if 'end' in response:
+        end = response['end']
+        print(comment + ' has end ' + str(end))
+    if 'sticky' in response:
+        sticky = response['sticky']
+
+    RESPONSES.append(Response(comment, code, redirect_codes, end, sticky))
+    
 FIRST_RESPONSE_CODE = '1'
 
 # Keeps track of the current posts
@@ -41,8 +73,8 @@ post_watchlist = set()
 
 def hour_difference(x, y):
     diff = abs(x - y)
-    diff /= (360)
-    return int(diff)
+    diff /= (60 * 60)
+    return diff
 
 def get_response(code):
     for resp in RESPONSES:
@@ -73,11 +105,10 @@ def process_comment(comment):
             next_code = cur_response.redirect_codes[redirect]
     if next_code == None:
         print('Processed comment successfully: User provided invalid response')
-        comment.reply('Invalid response, please try responding with the valid responses.\n\n' + cur_response.comment + '\n\n' + 'Code: ' + cur_response.code).mod.distinguish('yes')
+        comment.reply(f'Invalid response, please try responding with the valid responses.\n\n{cur_response.comment}\n\nCode:{cur_response.code}').mod.distinguish('yes')
     else:
         print('Processed comment successfully: User provided valid response')
         next_response = get_response(next_code)
-
         if next_response.end:
             print('Processed comment successfully: End of process, posting submission to community')
             comment.submission.mod.approve()
@@ -87,7 +118,7 @@ def process_comment(comment):
             if c != None:
                 c.mod.distinguish('yes', sticky=True)
 
-        comment.reply(next_response.comment + '\n\n' + 'Code: ' + next_response.code).mod.distinguish('yes')
+        comment.reply(next_response.comment + f'\n\nCode:   {next_response.code}').mod.distinguish('yes')
 
 def process_submission(submission):
     print('Processing new submission: ' + submission.title)
@@ -127,7 +158,6 @@ def main():
 
     subreddit = reddit.subreddit(SUBREDDIT)
     stream = subreddit.stream.submissions(pause_after=0)
-
     early_posts = set()
 
     while True:
@@ -141,7 +171,7 @@ def main():
             # Check if automoderator has commented
             automoderator = False
             for comment in updated_submission.comments:
-                if comment.author.name == 'txnelite':
+                if comment.author.name == MODERATOR:
                     automoderator = True
             if not automoderator:
                 if hour_difference(updated_submission.created_utc, time.time()) >= MAX_TIME:
@@ -161,8 +191,7 @@ def main():
             # Check if automoderator has commented
             automoderator = False
             for comment in submission.comments:
-                print('Checking ' + comment.author.name)
-                if comment.author.name == 'txnelite':
+                if comment.author.name == MODERATOR:
                     automoderator = True
             if not automoderator:
                 early_posts.add(submission.id)
@@ -175,8 +204,10 @@ def main():
             if isinstance(comment, praw.models.Comment):
                 print('Processing new comment: ')
                 if comment.subreddit.display_name.lower() != SUBREDDIT.lower():
+                    # Ignore if it's the wrong subreddit
                     print('Skipped comment: Incorrect subreddit')
                 elif comment.submission.author != comment.author:
+                    # Ignore if it's not OP
                     print('Skipped comment: author is not OP')
                 else:
                     # Process comment
