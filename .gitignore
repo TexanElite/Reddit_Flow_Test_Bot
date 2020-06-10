@@ -1,2 +1,3 @@
-responses.json
-interviews.db
+*.json
+*.db
+*.pyc
