@@ -4,18 +4,14 @@ import time
 import db
 import atexit
 
-CLIENT_ID = ''
-CLIENT_SECRET = ''
-USER_AGENT = ''
-USERNAME = ''
-PASSWORD = ''
-
-MODERATOR = ''
+CREDENTIALS_FILENAME = 'credentials.json'
+RESPONSE_FILENAME = 'responses.json'
 
 # Max time before post is ignored
 MAX_TIME = 72
 
 reddit = None
+has_bot_started = False
 
 class Response:
 
@@ -33,8 +29,28 @@ class Response:
         self.end = end
 
 
-# Initialize responses from response.json
-RESPONSE_FILENAME = 'responses.json'
+# Get credentials
+
+CREDENTIALS_FILE = open(CREDENTIALS_FILENAME, 'r')
+CREDENTIALS_JSON = json.loads(CREDENTIALS_FILE.read())
+
+CLIENT_ID = CREDENTIALS_JSON['CLIENT_ID']
+CLIENT_SECRET = CREDENTIALS_JSON['CLIENT_SECRET']
+USER_AGENT = CREDENTIALS_JSON['USER_AGENT']
+USERNAME = CREDENTIALS_JSON['USERNAME']
+PASSWORD = CREDENTIALS_JSON['PASSWORD']
+
+MODERATOR = CREDENTIALS_JSON['MODERATOR']
+SUBREDDIT = CREDENTIALS_JSON['SUBREDDIT']
+
+if not MODERATOR:
+    MODERATOR = 'AutoModerator'
+
+if not CLIENT_ID or not CLIENT_SECRET or not USER_AGENT or not USERNAME or not PASSWORD or not SUBREDDIT:
+    print(f'Invalid credentials, please populate {CREDENTIALS_FILENAME} correctly')
+    exit(0)
+
+# Initialize responses
 
 RESPONSE_FILE = open(RESPONSE_FILENAME, 'r')
 RESPONSE_JSON = json.loads(RESPONSE_FILE.read())
@@ -42,17 +58,18 @@ RESPONSES = []
 
 FIRST_RESPONSE_CODE = '1'
 OLD_RESPONSE_MESSAGE = 'Sorry, your time has expired to approve your post'
+INVALID_RESPONSE = 'Error, invalid response.'
+APPROVAL_MESSAGE = 'Submission has been approved!'
+SHUTDOWN_APPROVAL_MESSAGE = f'{USERNAME} is closing, so your post will be approved regardless of the interview status. Cheers!'
+UNEXPECTED_SHUTDOWN_MESSAGE = f'{USERNAME} is OFFLINE', f'{USERNAME} is OFFLINE due to an unexpected error. Resume manually moderationg posts'
 
 for key in RESPONSE_JSON:
     response = RESPONSE_JSON[key]
     if key == 'first_response_code':
         FIRST_RESPONSE_CODE = response
         continue
-    if key == 'old_response_message':
-        OLD_RESPONSE_MESSAGE = response
-        continue
-    comment = response['comment']
-    code = response['code']
+    comment = response['comment'].lower()
+    code = response['code'].lower()
     redirect_codes = None
     end = False
     sticky = False
@@ -60,7 +77,7 @@ for key in RESPONSE_JSON:
     if 'redirect_codes' in response:
         redirect_codes = dict()
         for key in response['redirect_codes']:
-            redirect_codes[key] = response['redirect_codes'][key]
+            redirect_codes[key] = response['redirect_codes'][key].lower()
     if 'end' in response:
         end = response['end']
     if 'sticky' in response:
@@ -114,7 +131,7 @@ def process_message(reddit, message):
     body = message.body
     next_code = parse_message(code, body)
     if next_code == None:
-        status = message.reply(f'Error, invalid response.\n\n{get_response(code).comment}')
+        status = message.reply(f'{INVALID_RESPONSE}\n\n{get_response(code).comment}')
         if status == None:
             db.remove_entry(entry.id)
     else:
@@ -128,7 +145,7 @@ def process_message(reddit, message):
             submission.reply(f'OP\'s response to the question "{get_response(code).comment}":  \n>{body}').mod.distinguish()
         if response.end:
             submission.mod.approve()
-            submission.reply('Submission has been approved!').mod.distinguish()
+            submission.reply(f'{APPROVAL_MESSAGE}').mod.distinguish()
             db.remove_entry(entry.id)
         else:
             db.update_code(entry.id, next_code)
@@ -174,20 +191,28 @@ def approve_all(message=None):
 
 
 def close_bot():
+    if not has_bot_started:
+        return
     print('Approving posts on the waitlist, please wait.')
     approve_all(message=f'{USERNAME} is closing, so your post will be approved regardless of the interview status. Cheers!')
     print('Finished processing, closing out')
 
 def main():
+    global reddit
+    global has_bot_started
+    print(f'{CLIENT_ID}')
     try:
-        global reddit
         reddit = praw.Reddit(client_id=CLIENT_ID,
                              client_secret=CLIENT_SECRET,
                              user_agent=USER_AGENT,
                              username=USERNAME,
                              password=PASSWORD)
-
         print(f"Authenticated as {reddit.user.me()}")
+    except Exception:
+        print('Invalid credentials, please enter correct credentials into {CREDENTIALS_FILENAME}')
+        return
+
+    try:
 
         subreddit = reddit.subreddit(SUBREDDIT)
         stream = subreddit.stream.submissions(pause_after=0)
@@ -202,7 +227,7 @@ def main():
         for submission in stream:
             if submission == None:
                 break
-
+        has_bot_started = True
         while True:
 
             ignored_posts = set()
@@ -263,7 +288,7 @@ def main():
             approve_all()
         except Exception:
             print('Approving failed, closing bot and sending modmail describing situation')
-            reddit.subreddit(SUBREDDIT).message(f'{USERNAME} is OFFLINE', f'{USERNAME} is OFFLINE due to an unexpected error. Resume manually moderationg posts')
+            reddit.subreddit(SUBREDDIT).message(UNEXPECTED_SHUTDOWN_MESSAGE)
             return
         time.sleep(60)
         main()

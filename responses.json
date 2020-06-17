@@ -1,0 +1,29 @@
+{
+    "first_response_code": "1",
+    "start_response": {
+        "comment": "Did you solve the problem?",
+        "code": "1",
+        "redirect_codes": {
+            "yes": "2",
+            "no": "3"
+        }
+    },
+    "solved_response": {
+        "comment": "Good job!",
+        "code": "2",
+        "end": true
+    },
+    "unsolved_response": {
+        "comment": "Ok, describe what you have done to try and solve the problem",
+        "code": "3",
+        "redirect_codes": {
+            "": "4"
+        },
+        "sticky": true
+    },
+    "post": {
+        "comment": "Will post as a comment so everybody can see",
+        "code": "4",
+        "end": true
+    }
+}
